@@ -32,22 +32,19 @@ export function colorOfUse(use) {
   return (USES[use] || USES.undefined).color
 }
 
-// Building height, from the lowest building (green) to the tallest (red).
+// Building height, from the lowest building (green) to RED_AT_M and above (red).
 export const HEIGHT_STOPS = ['#2e9e4f', '#f2c14e', '#d7301f']
+export const RED_AT_M = 20
 
 export function heightRange(buildings) {
   let min = Infinity
-  let max = -Infinity
-  for (const b of buildings) {
-    min = Math.min(min, b.height)
-    max = Math.max(max, b.height)
-  }
-  return [min, max]
+  for (const b of buildings) min = Math.min(min, b.height)
+  return [min, RED_AT_M]
 }
 
 // The colour at `height`, blended between the two nearest stops.
 export function colorOfHeight(height, [min, max]) {
-  const t = max > min ? (height - min) / (max - min) : 0
+  const t = max > min ? Math.min(Math.max((height - min) / (max - min), 0), 1) : 0
   const s = t * (HEIGHT_STOPS.length - 1)
   const i = Math.min(Math.floor(s), HEIGHT_STOPS.length - 2)
   return new THREE.Color(HEIGHT_STOPS[i]).lerp(new THREE.Color(HEIGHT_STOPS[i + 1]), s - i)

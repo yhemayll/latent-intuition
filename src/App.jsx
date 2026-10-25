@@ -157,7 +157,7 @@ function Method() {
   )
 }
 
-// The height scale, from the lowest building to the tallest.
+// The height scale, from the lowest building to RED_AT_M, where it turns full red.
 function Legend({ buildings }) {
   const [min, max] = useMemo(() => heightRange(buildings), [buildings])
 
@@ -168,7 +168,7 @@ function Legend({ buildings }) {
       <div className="ramp-labels">
         <span>{fmt(Math.round(min))} m</span>
         <span>{fmt(Math.round((min + max) / 2))} m</span>
-        <span>{fmt(Math.round(max))} m</span>
+        <span>{fmt(Math.round(max))}+ m</span>
       </div>
       <p className="note">Reached buildings take the shade of their walk.</p>
     </details>
