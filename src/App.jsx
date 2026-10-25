@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import CityScene from './CityScene.jsx'
+import Hud from './Hud.jsx'
+import LabScene from './LabScene.jsx'
 import OutbreakLayer from './OutbreakLayer.jsx'
 import { loadKit, prepare } from './city.js'
+import { LIFT_START } from './lab.js'
 import { STAGES, WEEKS, infectedAt, simulate, stageAt } from './outbreak.js'
 import { INFECTION_STOPS } from './palette.js'
 
@@ -9,7 +12,7 @@ const ATTRIBUTION =
   'Buildings: 3D building models LoD2 © GDI-Th (dl-de/by-2-0). Land use and pedestrian network: Egor Gaydukov, InfAU, Bauhaus-Universität Weimar. Census grid: Zensus 2022, © Statistische Ämter des Bundes und der Länder (dl-de/by-2-0).'
 
 const PLAY_WEEKS_PER_S = 0.2 // five seconds a week
-const DESCENT_MS = 3600
+const HUD_AFTER_MS = 4200 // the surveillance feed comes up once the section is open
 
 const fmt = (n) => n.toLocaleString('en-GB')
 
@@ -20,7 +23,11 @@ export default function App() {
   const [playing, setPlaying] = useState(false)
   const [intro, setIntro] = useState(true)
   const [discovery, setDiscovery] = useState(false)
-  const [lab, setLab] = useState(null) // null, 'descending' or 'ready'
+  const [revealStart, setRevealStart] = useState(null) // when the underground reveal began, or null
+  const [liftStart, setLiftStart] = useState(null) // when the lift last set off
+  const [view, setView] = useState({ i: 0, n: 0 }) // the camera angle of the section
+  const [hud, setHud] = useState(false)
+  const lab = revealStart != null
 
   useEffect(() => {
     loadKit()
@@ -54,15 +61,18 @@ export default function App() {
     return () => clearTimeout(t)
   }, [atEnd])
 
-  // Phase 1 stops at the descent. Phase 2 builds the laboratory where `lab` is 'ready'.
+  // The underground reveal: the section cuts through the city, the laboratory lights up, the lift goes down.
   const revealLab = () => {
+    const now = performance.now()
     setDiscovery(false)
     setPlaying(false)
-    setLab('descending')
+    setRevealStart(now)
+    setLiftStart(now + LIFT_START * 1000)
+    setView({ i: 0, n: 0 })
   }
   useEffect(() => {
-    if (lab !== 'descending') return
-    const t = setTimeout(() => setLab('ready'), DESCENT_MS)
+    if (!lab) return setHud(false)
+    const t = setTimeout(() => setHud(true), HUD_AFTER_MS)
     return () => clearTimeout(t)
   }, [lab])
 
@@ -82,13 +92,15 @@ export default function App() {
   }
 
   const zero = sim?.sites[0]
+  const look = (i) => setView((v) => ({ i, n: v.n + 1 }))
 
   return (
-    <div className={`app${discovery || lab ? ' covered' : ''}`} style={{ '--threat': (intro ? 0 : week / WEEKS).toFixed(3) }}>
+    <div className={`app${discovery || lab ? ' covered' : ''}${lab ? ' underground' : ''}`} style={{ '--threat': (intro ? 0 : week / WEEKS).toFixed(3) }}>
       <div className="scene">
         {city && sim ? (
-          <CityScene city={city} spin={intro} focus={lab ? [zero.x, zero.y] : null}>
+          <CityScene city={city} spin={intro} revealStart={revealStart} view={view}>
             {!intro && <OutbreakLayer sim={sim} week={week} />}
+            <LabScene bounds={city.bounds} site0={[zero.x, zero.y]} liftStart={liftStart} tags={hud && view.i !== 1} />
           </CityScene>
         ) : (
           <p className="loading">{error ?? 'Loading the city…'}</p>
@@ -106,7 +118,17 @@ export default function App() {
 
       {intro && <Intro ready={!!sim} error={error} onBegin={begin} />}
       {discovery && !lab && <Discovery onReveal={revealLab} onStay={() => setDiscovery(false)} />}
-      {lab && <Descent lab={lab} onReturn={() => setLab(null)} />}
+      {lab && !hud && <Descent />}
+      {lab && hud && (
+        <Hud
+          revealStart={revealStart}
+          liftStart={liftStart}
+          view={view.i}
+          onView={look}
+          onLift={() => setLiftStart(performance.now())}
+          onReturn={() => setRevealStart(null)}
+        />
+      )}
 
       <p className="attribution">{ATTRIBUTION}</p>
     </div>
@@ -281,26 +303,13 @@ function Discovery({ onReveal, onStay }) {
   )
 }
 
-// The transition into the laboratory. Phase 2 replaces the 'ready' card with the lab itself.
-function Descent({ lab, onReturn }) {
+// Captions while the section opens, before the surveillance feed comes up.
+function Descent() {
   return (
-    <div className={`descent ${lab}`} role="status">
-      {lab === 'descending' ? (
-        <div className="descent-lines">
-          <p>Tracing the signal to Site 0</p>
-          <p>Breaching the sealed level</p>
-          <p>Descending to sublevel B-4</p>
-        </div>
-      ) : (
-        <div className="modal-card">
-          <p className="eyebrow">Sublevel B-4</p>
-          <h1>The laboratory is sealed, for now.</h1>
-          <p className="story">The underground laboratory opens in Phase 2.</p>
-          <button className="link" onClick={onReturn}>
-            Return to the surface
-          </button>
-        </div>
-      )}
+    <div className="descent" role="status">
+      <p>Tracing the signal beneath the city</p>
+      <p>Cutting a section through Weimar</p>
+      <p>Sublevel complex detected</p>
     </div>
   )
 }

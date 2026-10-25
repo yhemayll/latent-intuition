@@ -22,7 +22,17 @@ Drag to orbit, right-drag to pan, scroll to zoom. Move the slider, click a week,
 - **Markers.** A dot on each infected roof and every 12 m along infected streets, from faint red to crimson over about nine days, with a faint glow on the ground for the infection zones. Amber dashed rings are quarantine perimeters from week 3.
 - **Deterministic.** Everything is worked out once from the data, with no randomness, so a week always looks the same, going forward or backward.
 - **Separate from the city.** The outbreak (`src/outbreak.js`, `src/OutbreakLayer.jsx`) reads the city but never changes its geometry (`src/city.js`, `src/CityScene.jsx`).
-- **Phase 2.** At week 4, "Reveal underground lab" dives the camera to Site 0 and shows a holding card. The laboratory itself comes in Phase 2, where `lab` is `'ready'` in `src/App.jsx`.
+
+## The underground laboratory
+
+At week 4, "Reveal underground lab" opens a section through the city centre. The design follows the Hive of the Resident Evil films; the facility, its history and its levels are fiction.
+
+- **Transition.** The infection steps back, the camera rises over the centre, and a vertical section plane sweeps north through the real buildings. The city turns into a pale blue ghost and the ground into glass, so the laboratory shows through from above.
+- **Section.** Everything south of the plane is cut away. Where it cuts a building or the laboratory, the inside shows as a flat section colour; the earth's cut face is navy with section hatching, open where the cavern is.
+- **Laboratory.** An inverted, stepped tower of octagonal tiers in five levels, B1 to B5, hanging on a glass shaft from the surface to 430 m below. A lift stops at each level. Lattice arms, bridges, tanks, two inclined access tunnels to hatches in the city, and an older tunnel towards Site 0.
+- **Interface.** An Umbrella surveillance feed: facility status, a schematic with the lift's position, containment by level, the lift's depth and a mission time. Four camera angles; in between, the mouse orbits in a limited range so the section stays in view. "Return to the surface" runs the reveal back.
+- **Infection.** The red markers stay on the city above, fainter, and are cut by the section with the buildings.
+- **Code.** `src/lab.js` (layout, timing, geometry), `src/LabScene.jsx` (the laboratory and the cut face), `src/section.js` (the shared plane and clock), `src/Hud.jsx` (the interface). The laboratory never changes the city's geometry.
 
 ## Data sources
 
