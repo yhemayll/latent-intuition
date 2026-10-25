@@ -1,44 +1,80 @@
-import { useEffect, useMemo } from 'react'
-import { Canvas } from '@react-three/fiber'
+import { useEffect, useMemo, useRef } from 'react'
+import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { OrbitControls } from '@react-three/drei'
 import * as THREE from 'three'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
-import { BACKGROUND, BAND_COLORS, GROUND, STREET, colorOfHeight, heightRange } from './palette.js'
+import { BACKGROUND, BUILDING, GROUND, STREET } from './palette.js'
 
 // The scene uses the city's local metres: x to the east, y up, and north towards -z.
 // A point (x, y) of the plan sits at (x, height, -y) in the scene.
 
-const STREET_Y = 1.2 // street lines float just above the walk areas
-const areaY = (band) => 0.3 * (3 - band) // 5 minutes on top
+const STREET_Y = 1.2 // street lines float just above the ground
 
-export default function CityScene({ city, result, onPick }) {
+// The city itself. Anything drawn on top of it, like the outbreak, comes in as `children`.
+// `focus` is a plan point [x, y] the camera dives towards; while it is set, the mouse can't move the view.
+export default function CityScene({ city, spin, focus, children }) {
   const { x0, y0, x1, y1 } = city.bounds
   const span = Math.max(x1 - x0, y1 - y0)
-
-  const pick = (e) => {
-    e.stopPropagation()
-    if (e.delta > 4) return // the mouse moved: that was an orbit, not a click
-    onPick(e.point.x, -e.point.z)
-  }
+  // Where the camera starts: a little south of the centre, where the outbreak starts.
+  const home = useMemo(() => ({ eye: [-0.3 * span, 0.75 * span, 0.62 * span], target: [0, 0, 0.1 * span] }), [span])
 
   return (
-    <Canvas camera={{ position: [-0.35 * span, 0.55 * span, 0.7 * span], fov: 40, near: 10, far: 20 * span }} dpr={[1, 2]}>
+    <Canvas camera={{ position: home.eye, fov: 40, near: 10, far: 20 * span }} dpr={[1, 2]}>
       <color attach="background" args={[BACKGROUND]} />
-      <hemisphereLight args={['#ffffff', '#cfc8b8', 1.4]} />
-      <directionalLight position={[-500, 1200, 700]} intensity={1.8} />
+      <fog attach="fog" args={[BACKGROUND, 1.1 * span, 3.2 * span]} />
+      <hemisphereLight args={['#9aa6ba', '#141619', 1.1]} />
+      <directionalLight position={[-700, 1100, -500]} intensity={1.4} color="#c9d3e8" />
 
-      <group onClick={pick}>
-        <Ground bounds={city.bounds} />
-        <Buildings buildings={city.buildings} buildingBand={result?.ok ? result.buildingBand : null} />
-      </group>
-
-      {result?.ok && result.bands.map((band, k) => <Area key={k} area={band.area} band={k} />)}
+      <Ground bounds={city.bounds} />
+      <Buildings buildings={city.buildings} />
       <Streets edges={city.edges} />
-      {result && <Marker at={result.ok ? result.start : result.click} found={result.ok} />}
+      {children}
 
-      <OrbitControls makeDefault enableDamping maxPolarAngle={Math.PI * 0.47} minDistance={60} maxDistance={3 * span} />
+      <OrbitControls
+        makeDefault
+        target={home.target}
+        enableDamping
+        enabled={!focus}
+        autoRotate={spin}
+        autoRotateSpeed={0.35}
+        maxPolarAngle={Math.PI * 0.47}
+        minDistance={60}
+        maxDistance={3 * span}
+      />
+      <Dive focus={focus} home={home} />
     </Canvas>
   )
+}
+
+// Moves the camera smoothly down towards `focus`, and back to `home` once it is cleared.
+function Dive({ focus, home }) {
+  const controls = useThree((s) => s.controls)
+  const goal = useRef({ target: new THREE.Vector3(), eye: new THREE.Vector3() })
+  const returning = useRef(false)
+  const dived = useRef(false)
+
+  useEffect(() => {
+    if (focus) dived.current = true
+    else if (dived.current) returning.current = true
+  }, [focus])
+
+  useFrame(({ camera }, dt) => {
+    if (!controls || (!focus && !returning.current)) return
+    const { target, eye } = goal.current
+    if (focus) {
+      target.set(focus[0], 0, -focus[1])
+      eye.set(focus[0] - 90, 140, -focus[1] + 160)
+    } else {
+      target.set(...home.target)
+      eye.set(...home.eye)
+      if (camera.position.distanceTo(eye) < 5) returning.current = false
+    }
+    const k = 1 - Math.exp(-dt * 1.4)
+    controls.target.lerp(target, k)
+    camera.position.lerp(eye, k)
+    controls.update()
+  })
+  return null
 }
 
 function Ground({ bounds: { x0, y0, x1, y1 } }) {
@@ -51,63 +87,28 @@ function Ground({ bounds: { x0, y0, x1, y1 } }) {
   )
 }
 
-// All buildings in one mesh. Each building owns a run of vertices, so it can be recoloured alone.
-function Buildings({ buildings, buildingBand }) {
-  const { geometry, ranges } = useMemo(() => mergeBuildings(buildings), [buildings])
+// All buildings in one mesh, so orbiting stays smooth.
+function Buildings({ buildings }) {
+  const geometry = useMemo(() => mergeBuildings(buildings), [buildings])
   useEffect(() => () => geometry.dispose(), [geometry])
-
-  useEffect(() => {
-    const colors = geometry.attributes.color
-    const c = new THREE.Color()
-    const range = heightRange(buildings)
-    buildings.forEach((b, i) => {
-      const band = buildingBand ? buildingBand[i] : -1
-      c.set(band >= 0 ? BAND_COLORS[band] : colorOfHeight(b.height, range))
-      const [start, count] = ranges[i]
-      for (let v = start; v < start + count; v++) colors.setXYZ(v, c.r, c.g, c.b)
-    })
-    colors.needsUpdate = true
-  }, [geometry, ranges, buildings, buildingBand])
 
   return (
     <mesh geometry={geometry}>
-      <meshLambertMaterial vertexColors />
+      <meshLambertMaterial color={BUILDING} />
     </mesh>
   )
 }
 
 function mergeBuildings(buildings) {
-  const parts = []
-  const ranges = []
-  let offset = 0
-  for (const b of buildings) {
+  const parts = buildings.map((b) => {
     const g = new THREE.ExtrudeGeometry(toShape(b.rings), { depth: b.height, bevelEnabled: false })
     g.rotateX(-Math.PI / 2) // extrude upwards, with the plan's north towards -z
     g.deleteAttribute('uv')
-    const count = g.attributes.position.count
-    ranges.push([offset, count])
-    offset += count
-    parts.push(g)
-  }
+    return g
+  })
   const geometry = mergeGeometries(parts)
   parts.forEach((g) => g.dispose())
-  geometry.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(offset * 3), 3))
-  return { geometry, ranges }
-}
-
-function Area({ area, band }) {
-  const geometry = useMemo(() => {
-    const g = new THREE.ShapeGeometry(area.map(toShape))
-    g.rotateX(-Math.PI / 2)
-    return g
-  }, [area])
-  useEffect(() => () => geometry.dispose(), [geometry])
-
-  return (
-    <mesh geometry={geometry} position={[0, areaY(band), 0]}>
-      <meshBasicMaterial color={BAND_COLORS[band]} />
-    </mesh>
-  )
+  return geometry
 }
 
 function Streets({ edges }) {
@@ -128,16 +129,6 @@ function Streets({ edges }) {
     <lineSegments geometry={geometry}>
       <lineBasicMaterial color={STREET} />
     </lineSegments>
-  )
-}
-
-// A post at the start node, or a grey one at the click when no street was close enough.
-function Marker({ at: [x, y], found }) {
-  return (
-    <mesh position={[x, 15, -y]}>
-      <cylinderGeometry args={[3, 3, 30, 16]} />
-      <meshLambertMaterial color={found ? '#2b2622' : '#9a958c'} />
-    </mesh>
   )
 }
 

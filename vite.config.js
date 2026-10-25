@@ -9,6 +9,4 @@ const base = repo && !repo.endsWith('.github.io') ? `/${repo}/` : '/'
 export default defineConfig({
   plugins: [react()],
   base,
-  // The walk calculation runs in a worker that imports other modules.
-  worker: { format: 'es' },
 })

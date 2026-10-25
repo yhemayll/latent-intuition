@@ -1,176 +1,306 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import CityScene from './CityScene.jsx'
-import { prepare, BAND_M, MAX_START_M, METRES_PER_MINUTE, MINUTES } from './reach.js'
-import { BAND_COLORS, HEIGHT_STOPS, heightRange } from './palette.js'
-
-const FILES = { kit: 'kit.json', buildings: 'buildings.geojson', graph: 'streets.graph.json', zensus: 'zensus.geojson' }
+import OutbreakLayer from './OutbreakLayer.jsx'
+import { loadKit, prepare } from './city.js'
+import { STAGES, WEEKS, infectedAt, simulate, stageAt } from './outbreak.js'
+import { INFECTION_STOPS } from './palette.js'
 
 const ATTRIBUTION =
   'Buildings: 3D building models LoD2 © GDI-Th (dl-de/by-2-0). Land use and pedestrian network: Egor Gaydukov, InfAU, Bauhaus-Universität Weimar. Census grid: Zensus 2022, © Statistische Ämter des Bundes und der Länder (dl-de/by-2-0).'
 
-const fmt = (n) => n.toLocaleString('en-GB')
+const PLAY_WEEKS_PER_S = 0.2 // five seconds a week
+const DESCENT_MS = 3600
 
-function loadKit() {
-  const load = ([key, file]) =>
-    fetch(`${import.meta.env.BASE_URL}data/${file}`)
-      .then((r) => {
-        if (!r.ok) throw new Error(`data/${file}: ${r.status}`)
-        return r.json()
-      })
-      .then((json) => [key, json])
-  return Promise.all(Object.entries(FILES).map(load)).then(Object.fromEntries)
-}
+const fmt = (n) => n.toLocaleString('en-GB')
 
 export default function App() {
   const [city, setCity] = useState(null)
-  const [result, setResult] = useState(null)
-  const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
-  const worker = useRef(null)
-  const lastId = useRef(0)
+  const [week, setWeek] = useState(0)
+  const [playing, setPlaying] = useState(false)
+  const [intro, setIntro] = useState(true)
+  const [discovery, setDiscovery] = useState(false)
+  const [lab, setLab] = useState(null) // null, 'descending' or 'ready'
 
   useEffect(() => {
-    let cancelled = false
     loadKit()
-      .then((raw) => {
-        if (cancelled) return
-        const w = new Worker(new URL('./reach.worker.js', import.meta.url), { type: 'module' })
-        w.onmessage = ({ data }) => {
-          if (data.id !== lastId.current) return // an older click
-          setResult(data.result)
-          setBusy(false)
-        }
-        w.onerror = (e) => {
-          setError(`The calculation failed (${e.message}).`)
-          setBusy(false)
-        }
-        w.postMessage({ type: 'data', raw })
-        worker.current = w
-        setCity(prepare(raw))
-      })
+      .then((raw) => setCity(prepare(raw)))
       .catch((e) => setError(`The city kit didn't load (${e.message}).`))
-    return () => {
-      cancelled = true
-      worker.current?.terminate()
-      worker.current = null
-    }
   }, [])
 
-  const pick = (x, y) => {
-    if (!worker.current) return
-    lastId.current += 1
-    setBusy(true)
-    worker.current.postMessage({ type: 'reach', id: lastId.current, x, y })
+  const sim = useMemo(() => city && simulate(city), [city])
+
+  // Play: move the slider forward until the last week.
+  useEffect(() => {
+    if (!playing) return
+    let last = performance.now()
+    let frame
+    const step = (now) => {
+      const dt = (now - last) / 1000
+      last = now
+      setWeek((w) => Math.min(w + dt * PLAY_WEEKS_PER_S, WEEKS))
+      frame = requestAnimationFrame(step)
+    }
+    frame = requestAnimationFrame(step)
+    return () => cancelAnimationFrame(frame)
+  }, [playing])
+
+  // Reaching the last week reveals the discovery, once each time the slider arrives there.
+  const atEnd = week >= WEEKS
+  useEffect(() => {
+    if (!atEnd) return setDiscovery(false)
+    setPlaying(false)
+    const t = setTimeout(() => setDiscovery(true), 1100) // let the map catch up first
+    return () => clearTimeout(t)
+  }, [atEnd])
+
+  // Phase 1 stops at the descent. Phase 2 builds the laboratory where `lab` is 'ready'.
+  const revealLab = () => {
+    setDiscovery(false)
+    setPlaying(false)
+    setLab('descending')
+  }
+  useEffect(() => {
+    if (lab !== 'descending') return
+    const t = setTimeout(() => setLab('ready'), DESCENT_MS)
+    return () => clearTimeout(t)
+  }, [lab])
+
+  const begin = () => {
+    setIntro(false)
+    setWeek(0)
   }
 
+  const scrub = (w) => {
+    setPlaying(false)
+    setWeek(w)
+  }
+
+  const togglePlay = () => {
+    if (!playing && week >= WEEKS) setWeek(0)
+    setPlaying(!playing)
+  }
+
+  const zero = sim?.sites[0]
+
   return (
-    <div className="app">
+    <div className={`app${discovery || lab ? ' covered' : ''}`} style={{ '--threat': (intro ? 0 : week / WEEKS).toFixed(3) }}>
       <div className="scene">
-        {city ? <CityScene city={city} result={result} onPick={pick} /> : <p className="loading">Loading the city…</p>}
+        {city && sim ? (
+          <CityScene city={city} spin={intro} focus={lab ? [zero.x, zero.y] : null}>
+            {!intro && <OutbreakLayer sim={sim} week={week} />}
+          </CityScene>
+        ) : (
+          <p className="loading">{error ?? 'Loading the city…'}</p>
+        )}
       </div>
+      <div className="atmosphere" aria-hidden="true" />
 
-      <aside className="panel">
-        <h1>Walking reach</h1>
-        <p className="hint">Click the ground to start a walk. Drag to orbit, right-drag to pan, scroll to zoom.</p>
-        {error && <p className="error">{error}</p>}
-        <Results result={result} busy={busy} />
-        <Method />
-      </aside>
+      {!intro && !lab && sim && (
+        <>
+          <Status week={week} sim={sim} onStory={() => setIntro(true)} onReveal={atEnd && !discovery ? revealLab : null} />
+          <Timeline week={week} playing={playing} onScrub={scrub} onPlay={togglePlay} />
+          <Legend />
+        </>
+      )}
 
-      {city && <Legend buildings={city.buildings} />}
+      {intro && <Intro ready={!!sim} error={error} onBegin={begin} />}
+      {discovery && !lab && <Discovery onReveal={revealLab} onStay={() => setDiscovery(false)} />}
+      {lab && <Descent lab={lab} onReturn={() => setLab(null)} />}
 
       <p className="attribution">{ATTRIBUTION}</p>
     </div>
   )
 }
 
-function Results({ result, busy }) {
-  if (busy) return <p className="status">Walking…</p>
-  if (!result) return null
-  if (!result.ok) {
-    return (
-      <p className="status warn">
-        No walkable street within {MAX_START_M} m of this point
-        {Number.isFinite(result.distance) && <> (the nearest is {fmt(Math.round(result.distance))} m away)</>}. Click
-        closer to a street.
-      </p>
-    )
-  }
+function Intro({ ready, error, onBegin }) {
   return (
-    <>
-      <p className="status">The walk starts at the nearest street node, {Math.round(result.distance)} m from your click.</p>
-      <table>
-        <thead>
-          <tr>
-            <th>Walk</th>
-            <th>Buildings</th>
-            <th>Residents</th>
-          </tr>
-        </thead>
-        <tbody>
-          {result.bands.map((b, k) => (
-            <tr key={b.minutes}>
-              <td>
-                <span className="swatch" style={{ background: BAND_COLORS[k] }} />
-                {b.minutes} min
-              </td>
-              <td>{fmt(b.buildings)}</td>
-              <td>
-                about {fmt(b.residents)}
-                {b.missingCells > 0 && (
-                  <span className="missing">
-                    + {b.missingCells} {b.missingCells === 1 ? 'cell' : 'cells'} without a figure
-                  </span>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </>
-  )
-}
-
-function Method() {
-  const [m1, m2, m3] = MINUTES.map((m) => fmt(m * METRES_PER_MINUTE))
-  return (
-    <div className="method">
-      <h2>How this is worked out</h2>
-      <p>
-        The walk starts at the street node nearest to your click and follows the pedestrian network at 4.8 km/h,
-        which is {METRES_PER_MINUTE} m a minute: {m1}, {m2} and {m3} m for {MINUTES.join(', ')} minutes. If no
-        walkable street is within {MAX_START_M} m, there is no walk.
-      </p>
-      <p>
-        Each area is the street segments reached in that time, including the reachable part of the last segment, with
-        a band of {BAND_M} m on each side, joined into one shape. A building counts when it touches the area.
-      </p>
-      <p>
-        Residents come from the 100 m cells of the Zensus 2022. Each cell that overlaps the area adds its population
-        times the share of the cell's area that lies inside. The sum is rounded to the nearest 10.
-      </p>
-      <p>
-        Some cells have no published population. They are not zero: they are left out of the sum, and the number of
-        such cells overlapping the area is shown next to it.
-      </p>
+    <div className="modal intro" role="dialog" aria-modal="true" aria-labelledby="intro-title">
+      <div className="modal-card">
+        <p className="eyebrow">An alternate-history simulation</p>
+        <h1 id="intro-title">
+          Weimar: Survival or the Next <span className="accent">Raccoon City?</span>
+        </h1>
+        <p className="subtitle">“Every city has secrets. Some should have stayed buried.”</p>
+        <div className="story">
+          <p>
+            In this version of history, Umbrella Corporation never stayed in Raccoon City. Its subsidiaries spread quietly
+            across Europe, buying warehouses, laboratories and leases under names nobody remembered.
+          </p>
+          <p>
+            In Weimar, one of those names rented a small industrial unit at the south-western edge of the old town. The
+            paperwork said cold storage for medical supplies. Below it, behind a door no inspector ever saw, Umbrella
+            sealed off a research level of its own.
+          </p>
+          <p>
+            For years the city noticed nothing: a few night deliveries, a hum under the pavement. Then, on a wet October
+            night, a pressure seal failed.
+          </p>
+          <p>What follows are four weeks, street by street.</p>
+        </div>
+        <button className="primary" onClick={onBegin} disabled={!ready}>
+          {ready ? 'Begin simulation' : error ? 'The city did not load' : 'Loading the city…'}
+        </button>
+        <p className="fiction">
+          A work of fiction. Umbrella Corporation, the facility and the outbreak are invented. The buildings and streets
+          are Weimar's real geometry from open data.
+        </p>
+      </div>
     </div>
   )
 }
 
-// The height scale, from the lowest building to RED_AT_M, where it turns full red.
-function Legend({ buildings }) {
-  const [min, max] = useMemo(() => heightRange(buildings), [buildings])
+function Status({ week, sim, onStory, onReveal }) {
+  const stage = stageAt(week)
+  const infected = infectedAt(sim.roofTimes, week)
+  const total = sim.roofs.length
+  const day = Math.round(week * 7)
 
   return (
-    <details className="legend" open>
-      <summary>Building height</summary>
-      <div className="ramp" style={{ background: `linear-gradient(to right, ${HEIGHT_STOPS.join(', ')})` }} />
-      <div className="ramp-labels">
-        <span>{fmt(Math.round(min))} m</span>
-        <span>{fmt(Math.round((min + max) / 2))} m</span>
-        <span>{fmt(Math.round(max))}+ m</span>
+    <aside className="panel">
+      <p className="eyebrow">Outbreak simulation · fiction</p>
+      <div className="week">
+        <span className="week-number">Week {stage.week}</span>
+        <span className="day">Day {day}</span>
       </div>
-      <p className="note">Reached buildings take the shade of their walk.</p>
+      <h2 key={stage.week} className="stage-title">
+        {stage.title}
+      </h2>
+      <p key={`t${stage.week}`} className="stage-text">
+        {stage.text}
+      </p>
+      <dl className="stats">
+        <div>
+          <dt>Buildings infected</dt>
+          <dd>
+            {fmt(infected)} <span>of {fmt(total)}</span>
+          </dd>
+        </div>
+        <div>
+          <dt>Share of the model</dt>
+          <dd>{Math.round((100 * infected) / total)}%</dd>
+        </div>
+      </dl>
+      <div className="meter" aria-hidden="true">
+        <div style={{ width: `${(100 * infected) / total}%` }} />
+      </div>
+      {onReveal && (
+        <button className="primary small" onClick={onReveal}>
+          Reveal underground lab
+        </button>
+      )}
+      <button className="link" onClick={onStory}>
+        Read the story again
+      </button>
+    </aside>
+  )
+}
+
+function Timeline({ week, playing, onScrub, onPlay }) {
+  return (
+    <div className="timeline">
+      <button className="play" onClick={onPlay} aria-label={playing ? 'Pause' : 'Play the outbreak'}>
+        {playing ? '❚❚' : '▶'}
+      </button>
+      <div className="track">
+        <input
+          type="range"
+          min="0"
+          max={WEEKS}
+          step="0.01"
+          value={week}
+          onChange={(e) => onScrub(Number(e.target.value))}
+          aria-label="Week of the outbreak"
+          aria-valuetext={`Week ${week.toFixed(1)}`}
+          style={{ '--fill': `${(100 * week) / WEEKS}%` }}
+        />
+        <ol className="ticks">
+          {STAGES.map((s) => (
+            <li key={s.week} style={{ left: `${(100 * s.week) / WEEKS}%` }}>
+              <button className={Math.floor(week + 1e-6) === s.week ? 'on' : ''} onClick={() => onScrub(s.week)}>
+                <b>
+                  <i>Week </i>
+                  {s.week}
+                </b>
+                <span>{s.title}</span>
+              </button>
+            </li>
+          ))}
+        </ol>
+      </div>
+    </div>
+  )
+}
+
+function Legend() {
+  return (
+    <details className="legend" open={window.matchMedia('(min-width: 641px)').matches}>
+      <summary>Legend</summary>
+      <div className="ramp" style={{ background: `linear-gradient(to right, ${INFECTION_STOPS.join(', ')})` }} />
+      <div className="ramp-labels">
+        <span>new case</span>
+        <span>established</span>
+      </div>
+      <ul>
+        <li>
+          <span className="key glow" /> infection zone along the streets
+        </li>
+        <li>
+          <span className="key beam" /> outbreak site
+        </li>
+        <li>
+          <span className="key arc" /> spread from one site to the next
+        </li>
+        <li>
+          <span className="key dash" /> quarantine perimeter
+        </li>
+      </ul>
+      <p className="note">A fictional scenario. The markers are not real data.</p>
     </details>
+  )
+}
+
+function Discovery({ onReveal, onStay }) {
+  return (
+    <div className="modal discovery" role="dialog" aria-modal="true" aria-labelledby="discovery-title">
+      <div className="modal-card">
+        <p className="eyebrow">Week 4 · Day 28</p>
+        <h1 id="discovery-title">“The outbreak didn't begin here.”</h1>
+        <p className="story">
+          Evidence points to a concealed research complex beneath Weimar. The source of the outbreak may be closer than
+          anyone imagined.
+        </p>
+        <button className="primary reveal" onClick={onReveal}>
+          Reveal underground lab
+        </button>
+        <button className="link" onClick={onStay}>
+          Stay on the surface
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// The transition into the laboratory. Phase 2 replaces the 'ready' card with the lab itself.
+function Descent({ lab, onReturn }) {
+  return (
+    <div className={`descent ${lab}`} role="status">
+      {lab === 'descending' ? (
+        <div className="descent-lines">
+          <p>Tracing the signal to Site 0</p>
+          <p>Breaching the sealed level</p>
+          <p>Descending to sublevel B-4</p>
+        </div>
+      ) : (
+        <div className="modal-card">
+          <p className="eyebrow">Sublevel B-4</p>
+          <h1>The laboratory is sealed, for now.</h1>
+          <p className="story">The underground laboratory opens in Phase 2.</p>
+          <button className="link" onClick={onReturn}>
+            Return to the surface
+          </button>
+        </div>
+      )}
+    </div>
   )
 }
