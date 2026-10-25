@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import CityScene from './CityScene.jsx'
 import Hud from './Hud.jsx'
 import LabScene from './LabScene.jsx'
@@ -13,6 +13,7 @@ const ATTRIBUTION =
 
 const PLAY_WEEKS_PER_S = 0.2 // five seconds a week
 const HUD_AFTER_MS = 4200 // the surveillance feed comes up once the section is open
+const MUSIC_URL = `${import.meta.env.BASE_URL}music/final-countdown.wav`
 
 const fmt = (n) => n.toLocaleString('en-GB')
 
@@ -76,9 +77,13 @@ export default function App() {
     return () => clearTimeout(t)
   }, [lab])
 
+  // Background music, looping once the simulation begins.
+  const music = useRef(null)
+
   const begin = () => {
     setIntro(false)
     setWeek(0)
+    music.current?.play().catch(() => {})
   }
 
   const scrub = (w) => {
@@ -129,6 +134,8 @@ export default function App() {
           onReturn={() => setRevealStart(null)}
         />
       )}
+
+      <audio ref={music} src={MUSIC_URL} loop preload="auto" />
 
       <p className="attribution">{ATTRIBUTION}</p>
     </div>
