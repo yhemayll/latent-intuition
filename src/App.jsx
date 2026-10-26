@@ -14,6 +14,7 @@ const ATTRIBUTION =
 const PLAY_WEEKS_PER_S = 0.2 // five seconds a week
 const HUD_AFTER_MS = 4200 // the surveillance feed comes up once the section is open
 const MUSIC_URL = `${import.meta.env.BASE_URL}music/final-countdown.wav`
+const CLICK_URL = `${import.meta.env.BASE_URL}music/click.mp3`
 
 const fmt = (n) => n.toLocaleString('en-GB')
 
@@ -64,6 +65,7 @@ export default function App() {
 
   // The underground reveal: the section cuts through the city, the laboratory lights up, the lift goes down.
   const revealLab = () => {
+    click()
     const now = performance.now()
     setDiscovery(false)
     setPlaying(false)
@@ -80,7 +82,17 @@ export default function App() {
   // Background music, looping once the simulation begins.
   const music = useRef(null)
 
+  // A click sound for the main buttons, restarted on every press.
+  const clickSound = useRef(null)
+  const click = () => {
+    const s = clickSound.current
+    if (!s) return
+    s.currentTime = 0
+    s.play().catch(() => {})
+  }
+
   const begin = () => {
+    click()
     setIntro(false)
     setWeek(0)
     music.current?.play().catch(() => {})
@@ -92,12 +104,16 @@ export default function App() {
   }
 
   const togglePlay = () => {
+    if (!playing) click() // only when starting or resuming, not when pausing
     if (!playing && week >= WEEKS) setWeek(0)
     setPlaying(!playing)
   }
 
   const zero = sim?.sites[0]
-  const look = (i) => setView((v) => ({ i, n: v.n + 1 }))
+  const look = (i) => {
+    click()
+    setView((v) => ({ i, n: v.n + 1 }))
+  }
 
   return (
     <div className={`app${discovery || lab ? ' covered' : ''}${lab ? ' underground' : ''}`} style={{ '--threat': (intro ? 0 : week / WEEKS).toFixed(3) }}>
@@ -130,12 +146,19 @@ export default function App() {
           liftStart={liftStart}
           view={view.i}
           onView={look}
-          onLift={() => setLiftStart(performance.now())}
-          onReturn={() => setRevealStart(null)}
+          onLift={() => {
+            click()
+            setLiftStart(performance.now())
+          }}
+          onReturn={() => {
+            click()
+            setRevealStart(null)
+          }}
         />
       )}
 
       <audio ref={music} src={MUSIC_URL} loop preload="auto" />
+      <audio ref={clickSound} src={CLICK_URL} preload="auto" />
 
       <p className="attribution">{ATTRIBUTION}</p>
     </div>
